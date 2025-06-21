@@ -13,8 +13,6 @@ model = YOLO("runs/segment/bookspine-seg5/weights/best.pt")  # load a custom mod
 img_paths = glob.glob('bookspine/images/test/*.jpg') # all the images waiting to be tested 
 results_summary = []
 
-
-
 for img_path in img_paths: 
     img = cv2.imread(img_path)
     results = model(img_path)

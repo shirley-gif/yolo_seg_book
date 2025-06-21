@@ -13,4 +13,3 @@ model = YOLO("runs/segment/bookspine-seg-resume/weights/best.pt")
 
 # 导出为 ONNX 格式
 model.export(format="onnx", opset=12, dynamic=True)
-
