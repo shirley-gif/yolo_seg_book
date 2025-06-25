@@ -10,7 +10,8 @@ import onnxruntime as ort
 import numpy as np  
 import cv2
 import matplotlib.pyplot as plt
-import pytesseract
+import easyocr
+
 
 
 def preprocess_image(image_path: str,input_size = (640, 640)) -> np.ndarray:
@@ -152,10 +153,94 @@ def filter_and_sort_boxes(preds, score_threshold=0.8, nms_threshold=0.4):
 
     return keep_indices_sorted, boxes_sorted
 
+def get_ocr(img):
+    """
+    Initialize and return an OCR reader.
+    """
+    
+    reader = easyocr.Reader(['en'], gpu=False)
+
+    #img = cv2.imread('masked_area_8190.png')  # 确保图像路径正确
+    results = reader.readtext(img)
+
+    texts = []
+    flag = False
+    for (box, text, conf) in results:
+        #print(f"OCR: {text} （置信度: {conf:.2f}）")
+        if text.strip() == 'DKU':
+            flag = True
+        if flag : 
+            texts.append(text)
+        box = [tuple(map(int, pt)) for pt in box]
+        #cv2.polylines(img, [np.array(box)], True, (0, 255, 0), 2)
+        #cv2.putText(img, text, box[0], cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
+    
+    #text = '_'.join(texts)
+    return texts, img
+
+def draw_multiline_text_with_background(
+    img,
+    text,
+    x,
+    y,
+    h=0,  # 可选：用于整体往下偏移（比如目标框高度的一半）
+    font=cv2.FONT_HERSHEY_SIMPLEX,
+    font_scale=0.7,
+    text_color=(255, 0, 0),
+    bg_color=(255, 255, 255),
+    thickness=2,
+    line_spacing=5
+):
+    """
+    在图像上绘制多行文字，并添加白色背景框。
+
+    参数说明：
+    - img: 原图
+    - text: 多行文本（使用 \n 分隔）
+    - x, y: 左上角起始坐标
+    - h: 可选向下偏移量（如目标框高度）
+    - 其他为字体和颜色参数
+    """
+    lines = text
+    if not lines or lines == ['']:
+        lines = ['(empty)']
+
+    # 单行文字高度
+    (_, text_h), baseline = cv2.getTextSize("A", font, font_scale, thickness)
+    line_height = text_h + baseline + line_spacing
+
+    # 起始位置
+    x0 = int(x)
+    y0 = int(y + h / 2)
+
+    # 计算背景框宽高
+    max_width = max(cv2.getTextSize(line, font, font_scale, thickness)[0][0] for line in lines)
+    box_width = max_width
+    box_height = line_height * len(lines) - line_spacing  # 最后一行不需要额外 spacing
+
+    # 背景矩形
+    cv2.rectangle(img, (x0, y0), (x0 + box_width, y0 + box_height), bg_color, cv2.FILLED)
+
+    # 逐行写文字
+    for i, line in enumerate(lines):
+        y_line = y0 + i * line_height + text_h
+        cv2.putText(img, line, (x0, y_line), font, font_scale, text_color, thickness)
 
 
+# BGR to RGB for matplotlib
+#img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+#pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 _threshold = 0.85  # 置信度阈值
 _dimension = (640, 640)  # 模型输入尺寸
+
+
+# 文本参数
+font = cv2.FONT_HERSHEY_SIMPLEX
+font_scale = 0.7
+thickness = 2
+text_color = (255, 0, 0)      # 蓝色
+bg_color = (255, 255, 255)    # 白色
 
 # 加载图片，并将它处理为onnx模型输入格式 # Add batch dimension: [1, 3, 640, 640] RGB
 img, original_image, scale = preprocess_image("dku_data/dku_barcode.jpg") # Change to your image path
@@ -173,7 +258,7 @@ preds = outputs[0][0]       # shape: (37, 8400)
 # preds[4] 是置信度，preds[5:37] 是 mask 系数
 # 处理每个预测框    
 conf = preds[4]
-indices = np.where(conf > 0.80)[0]
+indices = np.where(conf > _threshold)[0]
 print(f"检测到 {len(indices)} 个高置信度目标")
 
 keep_indices, boxes_sorted = filter_and_sort_boxes(preds, _threshold, 0.4)
@@ -224,22 +309,28 @@ for index in range(len(keep_indices)):
     bit_region = cv2.bitwise_and(original_image, original_image, mask=masked_area_original)
 
     # 2. 灰度化并二值化
-    gray = cv2.cvtColor(bit_region, cv2.COLOR_BGR2GRAY)
-
-    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-
-    cv2.imshow("Original_mask", binary)
-    cv2.imwrite(f"masked_area_{i}.png", binary)
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
+    #gray = cv2.cvtColor(bit_region, cv2.COLOR_BGR2GRAY)
+    #_, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    #  取掩膜非零区域最小外接矩形
+    x, y, w, h = cv2.boundingRect(masked_area_original)
+    #cropped_binary = binary[y:y+h, x:x+w]
+    #cv2.imshow("Original_mask", bit_region)
+    #cv2.imwrite(f"masked_area_{i}.png", cropped_binary)
+    #cv2.waitKey(0)
+    #cv2.destroyAllWindows()
     # 3. OCR 识别
-    text = pytesseract.image_to_string(binary, config='--psm 11')
-    print(f"识别结果 OCR: {text.strip()}")
-   
+    #text = pytesseract.image_to_string(binary, config='--psm 11')
+    text, ocr_img = get_ocr(bit_region)
+    print(f"识别结果 OCR: {'_'.join(text)}")
+    #cv2.imshow("Original_mask", ocr_img)
+    #cv2.waitKey(0)
+    #cv2.destroyAllWindows()
+    draw_multiline_text_with_background(blended_image, text, x, y, h)
+
 # 3. 显示结果
-#cv2.imshow("叠加图", blended_image)
-#cv2.waitKey(0)
-#cv2.destroyAllWindows()
+cv2.imshow("叠加图", blended_image)
+cv2.waitKey(0)
+cv2.destroyAllWindows()
 
 
 
